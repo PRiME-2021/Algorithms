@@ -38,6 +38,69 @@ def fetch_data_all(begin, end):
         all_examples += lmfdb_data['data']
     return all_examples[begin:end]
 
+def fetchListOfLabels(listOfLabels):
+    """
+    Inputs : A list of labels, where each label is a string
+    ---
+    Returns: a list of dictionaries containing the data of the specified labels from LMFDB
+    ---
+    Description: 
+    """
+    # Makes a request to LMFDB API to
+    # get a json of all genus 1 Belyi pairs.
+    parameters = {"genus": 1}
+    all_examples = []
+    for mult in range(4):
+        offset = mult * 100
+        url = "https://www.lmfdb.org/api/belyi_galmaps/?_format=json&_offset=" + str(offset) + "&g=i" + str(parameters["genus"])
+        response = requests.get(url)
+        lmfdb_data = response.json()
+        all_examples += lmfdb_data['data']
+    # To store our specified examples
+    specified_examples = []
+    # For each dictionary in our list of all dictionaries from LMFDB
+    for index, dictionary in enumerate(all_examples):
+        # If the label matches one of our specified labels
+        if all_examples[index]['label'] in listOfLabels:
+            # append the data in that dictionary to our list of specified examples
+            specified_examples.append(all_examples[index])
+    return(specified_examples)
+    
+def fetchRangeOfLabels(beginningLabel, endingLabel):
+    """
+    Inputs : beginningLabel-- a label in string form representing the start of our range, 
+    endingLabel-- another label in string form representing the end of our range
+    ---
+    Returns: a list of dictionaries containing the data of the labels specified by the range(begin, end) from LMFDB
+    ---
+    Description: 
+    """
+    # Makes a request to LMFDB API to
+    # get a json of all genus 1 Belyi pairs.
+    parameters = {"genus": 1}
+    all_examples = []
+    for mult in range(4):
+        offset = mult * 100
+        url = "https://www.lmfdb.org/api/belyi_galmaps/?_format=json&_offset=" + str(offset) + "&g=i" + str(parameters["genus"])
+        response = requests.get(url)
+        lmfdb_data = response.json()
+        all_examples += lmfdb_data['data']
+
+    begin = 0
+    end = 0
+    # For each dictionary in our list of all dictionaries from LMFDB
+    for index, dictionary in enumerate(all_examples):
+        # If the label matches our specified beginning label
+        if all_examples[index]['label'] == beginningLabel:
+            # store the beginning index
+            begin = index
+        # If the label matches our specified ending label
+        if all_examples[index]['label'] == endingLabel:
+            # store the ending index
+            end = index 
+    # return the subset of dictionaries from LMFDB that we're interested in
+    return all_examples[begin:end]
+
 def compute_G(dic, points_only=True, only_tor=False, translate=False):
     """
     Inputs: dic - Dictionary entry of an LMFDB example
