@@ -1,0 +1,351 @@
+# """
+# Author(s): PRiME 2021 Group 2
+# 
+# Description:
+# A cleaned up version of the code worked on
+# in the week July 11 - July 15.
+# 
+# Can normalize LMFDB examples which do not
+# have place degree greater than 1 and
+# compute critical point sets for these examples.
+# 
+
+import requests
+import numpy as np
+from cysignals.alarm import alarm, AlarmInterrupt, cancel_alarm
+import json
+import datetime
+from itertools import combinations
+
+def fetch_data_all(begin, end):
+    """
+    Inputs : begin - Beginning index for examples
+           : end - ending index for examples
+    ---
+    Returns: a list of dictionaries of
+    examples number 'begin' to 'end'
+    ---
+    Description: Makes a request to LMFDB API to
+    get a json of all genus 1 Belyi pairs.
+    """
+    parameters = {"genus": 1}
+    all_examples = []
+    for mult in range(4):
+        offset = mult * 100
+        url = "https://www.lmfdb.org/api/belyi_galmaps/?_format=json&_offset=" + str(offset) + "&g=i" + str(parameters["genus"])
+        response = requests.get(url)
+        lmfdb_data = response.json()
+        all_examples += lmfdb_data['data']
+    return all_examples[begin:end]
+
+def compute_G(dic, points_only=True, only_tor=False, translate=False):
+    """
+    Inputs: dic - Dictionary entry of an LMFDB example
+    ---
+    Returns : If successful returns a list [ [ [label, [S, q0], [S_translate, qp], P0 ] ]
+            : label - the LMFDB labe for the Belyi pair
+            : S - Untranslated set of critical points
+            : [ 'label', 'B' or 'W' or 'F', point on E, order of point, degree of place, ramif. index]
+            : q0 - the weigthed sum over the inverse images
+            : S_translated - Normalized critical points
+            : qp - Normalized sum (should be identity)
+            : P0 - Point of translation
+            : If failed returns an error message string.
+    ---
+    Description:
+    Normalizes Belyi pair examples.
+    """
+    # This will determine the smallest number field where all of the critical points exist
+
+    # STEP #1: COPY INFORMATION FROM LMFDB
+
+    # Define the number field
+    label = dic['label']
+    deg = dic['deg']
+    base_field = dic['base_field']
+    R.<T> = PolynomialRing(QQ)
+    K.<nu> = NumberField( R(base_field) )
+    is_tor = True
+    points = []
+
+    # Get curve equation
+    curve_str = dic['curve'].replace('=', ' -(')
+    curve = curve_str + ')'
+
+    # Define the elliptic curve
+    P1.<x, y> = PolynomialRing(K)
+    X = EllipticCurve( P1(curve) )
+
+    # Define the Belyi map
+
+    K0.<x> = FunctionField(K)
+    _.<Y> = K0[]
+    a1, a2, a3, a4, a6 = X.a_invariants()
+    KX.<y> = K0.extension( (Y^2 + a1*x*Y + a3*Y) - (x^3 + a2*x^2 + a4*x + a6) )
+
+    phi = KX( dic['map'] )
+
+    # STEP #2: COMPUTE THE SMALLEST NUMBER FIELD CONTAINING ALL CRITICAL POINTS
+
+    # Embed the function fields into the correct extension
+
+    L = QQbar
+    sigma = K.embeddings(L)[0] # Embed K into L
+
+    L0.<u> = FunctionField(L)
+    sigm0 = K0.hom(u, base_morphism=sigma) # Embed K0 into L0
+
+    _.<V> = L0[]
+    LHS = V^2 + sigm0(a1)*u*V + sigm0(a3)*V
+    RHS = u^3 + sigm0(a2)*u^2 + sigm0(a4)*u + sigm0(a6)
+    LX.<v> = L0.extension(LHS - RHS)
+    sigmX = KX.hom(v, base_morphism=sigm0) # Embed KX into LX
+
+    # Base change the Belyi map to L
+    Phi = sigmX(phi)
+
+    # Compute the number field
+    
+    F = K
+    for k in range(3) :
+        D = ([ Phi, Phi-1, 1/Phi][k]).divisor_of_zeros()
+        for p in D.support() :
+            if [p] == (u*v).poles() :
+                F = F
+            else : 
+                F = (u.evaluate(p).minpoly() * (v.evaluate(p).minpoly())).change_ring(F).splitting_field('s')
+
+    L = F
+
+    # STEP #3: COMPUTE THE CRITICAL POINTS AND THEIR ORDERS
+
+    # Embed the function fields into the correct extension
+    sigma = K.embeddings(L)[0] # Embed K into L
+    E = EllipticCurve([sigma(a1), sigma(a2), sigma(a3), sigma(a4), sigma(a6)])
+
+    L0.<u> = FunctionField(L)
+    sigm0 = K0.hom(u, base_morphism=sigma) # Embed K0 into L0
+    _.<V> = L0[]
+    LHS = V^2 + sigm0(a1)*u*V + sigm0(a3)*V
+    RHS = u^3 + sigm0(a2)*u^2 + sigm0(a4)*u + sigm0(a6)
+    LX.<v> = L0.extension(LHS - RHS)
+    sigmX = KX.hom(v, base_morphism=sigm0) # Embed KX into LX
+
+    # Base change the Belyi map to L
+
+    Phi = sigmX(phi)
+    S = []
+    points = []
+    # Compute the divisor
+    labels = {0: 'B', 1: 'W', 2: 'F'}
+    for k in labels :
+        (Phi).divisor_of_zeros()
+        D = ([ Phi, Phi-1, 1/Phi ][k]).divisor_of_zeros() # Erik Note: This is being problematic
+
+        Q = E([0,1,0]); n = 0
+        for p in D.support():
+            e = D.multiplicity(p)
+
+            if [p] == (u*v).poles() :
+                P = E([0,1,0])
+            else :
+                P = E([u.evaluate(p), v.evaluate(p)])
+            if P.order() == oo:
+                is_tor = is_tor and False
+            if only_tor:
+                if not is_tor:
+                    return [ is_tor, [] ]
+            S.append( [ label, labels[k], P, P.order(), p.degree(), D.multiplicity(p) ] )
+            points.append(P)
+            Q = E(Q) + e*P
+
+    # Translate S
+    if translate:
+        S_translate = S.copy()
+        P0polynomial = Q.division_points(deg, poly_only=True)
+        P0_list = []
+        P0factors = list(P0polynomial.factor())
+
+        k = 0
+        while P0_list == [] and k <= len(P0factors):
+            L2.<b> = L.extension( P0factors[k][0] )
+            Z = E.base_extend(L2)
+            P0_list = Z(Q).division_points( deg )
+            k += 1
+        if P0_list != []:
+            P0 = P0_list[0]
+            S_translate = []
+            new_points = []
+            is_tor_new = True
+            for lst in S:
+                Pp = Z(lst[2]) - Z(P0)
+                new_lst = lst.copy()
+                new_lst[2] = Pp
+                new_points.append(Pp)
+                new_lst[3] = Pp.order()
+                if Pp.order() == oo:
+                    is_tor_new = is_tor_new and False
+                S_translate.append(new_lst)
+
+            qp = S_translate[0][5] - S_translate[0][5]
+            for lst in S_translate:
+                qp += lst[5] * lst[2]
+            if points_only:
+                return [ is_tor_new, new_points ]
+            else:
+                return [ [label, is_tor], [S, Q], [S_translate, qp], P0 ]
+        else:
+            return "No division points found"
+    return [ is_tor, points ]
+
+
+def generate_group(lst):
+    """
+    Inputs : lst - list of points with the assumed precondition that they are defined on a curve and torsion
+    ---
+    Returns : [G, H, label]
+            : G - the group generated by 'lst' points
+            : H - permtuation gorup isomorhpic to G as a SAGE object
+            : label - cyclic group decomposition of G
+    ---
+    Description: Finds the least common multiple of the order of the points, performs a round-robin addition of the points
+    in the listOfPoints at all necessary powers (dictated by the L.C.M.). Find permutation representation for G and encodes
+    this as a sage PermutationGroup(). Runs through the possibile isomorphisms to find the decomposition of G.
+    """
+    # Store the order of the points
+    point_orders = []
+    for pt in lst:
+        point_orders.append(pt.order())
+
+    # Compute the least common multiple
+    max_ord = np.lcm.reduce(point_orders)
+    G = set()
+
+    # Find the group generated by G
+    for i in range(0, len(lst)):
+        for j in range(0, len(lst)):
+            for n in range(1, max_ord):
+                for m in range(1, max_ord):
+                    # i,j,n,m are to take all products (g_i)^n*(h_j)^m
+                    # We know order is at most lcm(5,10) = 10
+                    G.add(n*lst[i] + m*lst[j])
+
+    keys = []
+    for index, pt in enumerate(G):
+        keys.append(index + 1)
+
+    permutation_dict = dict(zip(G, keys))
+
+    permutations = []
+
+    Gl = list(G)
+    for row, pt in enumerate(Gl):
+        permutation = []
+        for column, pt in enumerate(Gl):
+            new_point = Gl[row] + Gl[column]
+            label = permutation_dict[new_point]
+            permutation.append(label)
+        permutations.append(permutation)
+
+    permutations_reps = []
+    for permutation in permutations:
+        permutations_reps.append(Permutation(permutation))
+
+    permutation_group = PermutationGroup(permutations_reps)
+
+    # Check if the group is cyclic
+    H1 = CyclicPermutationGroup(len(G))
+    is_cyclic = permutation_group.is_isomorphic(H1)
+
+    if is_cyclic:
+        return [G, H1, "Z/" + str(len(G)) + "Z"]
+
+    # Check if the group is a product of cyclic groups
+    product_cases = []
+    for m in range(len(G)):
+        for n in range(len(G)):
+            if m * n == len(G) and m <= n:
+                product_cases.append([m,n])
+
+    for case in product_cases:
+        H2 = direct_product_permgroups([CyclicPermutationGroup(case[0]), CyclicPermutationGroup(case[1])])
+        is_prod = permutation_group.is_isomorphic(H2)
+        if is_prod and not is_cyclic:
+            return [G, H2, "(Z/" + str(case[0]) + "Z)" + " x " + "(Z/" + str(case[1]) + "Z)"]
+
+    if not (is_prod or is_cyclic):
+        return "No isomorphism found"
+
+def checkColinearity(listOfPoints):
+    # Use itertools to compute choosing 3 points from a list of N points
+    # This is a list of tuples of points, where each tuple represents a combination of points
+    possibleCombinations = list(combinations(listOfPoints, 3))
+    # Hacky way of computing the point at infinity
+    pointAtInfinity = possibleCombinations[0][0] - possibleCombinations[0][0]
+    # To store the points that are collinear, if any
+    listOfColinearPoints = []
+    # For each tuple
+    for comb in possibleCombinations:
+        # To store the resulting sum of the three points
+        sumOfPoints = pointAtInfinity
+         # For each point in the tuple
+        for point in comb:
+            sumOfPoints = sumOfPoints + point
+        # If that sum is equal to the point at infinity, then we know the points are colinear
+        if sumOfPoints == pointAtInfinity:
+            # Thus, add that combination of points to our list of colinear points
+            listOfColinearPoints.append(comb)
+    return listOfColinearPoints
+
+b = 0
+data = fetch_data_all(b, 251)
+
+# Generate a unique filename based on date
+filename = str(datetime.datetime.now()) + '_PRIME_Grp2_data'
+
+torsion_examples = []
+not_torsion_examples = []
+
+# filename = "first_test.txt"
+file_data = []
+
+count = b
+
+
+info = "error"
+for dic in data:
+    count
+    new_entry = {}
+    label = dic['label']
+    new_entry["label"] = label
+    new_entry["index"] = str(count)
+    count += 1
+    try:
+        alarm(300)
+        info = compute_G(dic)
+    except (AlarmInterrupt, KeyboardInterrupt):
+        print(label, " Timed Out")
+        new_entry["status"] = "timed out"
+        new_entry["group_name"] = "Na"
+        info = "error"
+    else:
+        cancel_alarm()
+        if type(info) == list:
+            [is_tor, points] = info
+            new_entry["colinear_points"] = str(checkColinearity(points))
+            if is_tor:
+                [st, grp, name] = generate_group(points)
+                torsion_examples.append([label, name])
+                new_entry["status"] = "torsion"
+                new_entry["group_name"] = name
+            else:
+                not_torsion_examples.append([label])
+                name = "<G> is not finite."
+                new_entry["status"] = "not torsion"
+                new_entry["group_name"] = name
+        else:
+            new_entry["status"] = "non-timing error"
+            new_entry["group_name"] = "Na"
+    file_data.append(new_entry)
+    with open("generated_data/" + filename + '.txt', "w") as fle:
+        json.dump(file_data, fle)
